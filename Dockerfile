@@ -1,50 +1,74 @@
 FROM node:18-alpine AS base
 
-# Backend build
-FROM base AS backend-build
+# Install dependencies
+RUN apk add --no-cache libc6-compat
+
+# ---- Backend ----
+FROM base AS backend
 WORKDIR /app/backend
 COPY backend/package.json ./
 RUN npm install
 COPY backend/ ./
 
-# Frontend build
-FROM base AS frontend-build
+# ---- Frontend ----
+FROM base AS frontend
 WORKDIR /app/frontend
 COPY frontend/package.json ./
 RUN npm install
 COPY frontend/ ./
+ENV NEXT_PUBLIC_API_URL=http://localhost:3001
 RUN npx next build
 
-# Production
+# ---- Production ----
 FROM base AS production
 WORKDIR /app
 
-# Install PM2
+# Install PM2 for process management
 RUN npm install -g pm2
 
 # Copy backend
-COPY --from=backend-build /app/backend /app/backend
-WORKDIR /app/backend
-RUN npm install --production
+COPY --from=backend /app/backend /app/backend
 
-# Copy frontend build
-COPY --from=frontend-build /app/frontend/.next /app/frontend/.next
-COPY --from=frontend-build /app/frontend/public /app/frontend/public
-COPY --from=frontend-build /app/frontend/package.json /app/frontend/package.json
-COPY --from=frontend-build /app/frontend/node_modules /app/frontend/node_modules
+# Copy frontend
+COPY --from=frontend /app/frontend/.next /app/frontend/.next
+COPY --from=frontend /app/frontend/public /app/frontend/public
+COPY --from=frontend /app/frontend/package.json /app/frontend/package.json
+COPY --from=frontend /app/frontend/node_modules /app/frontend/node_modules
 
-# Create data directory for JSON DB
+# Create data directory
 RUN mkdir -p /app/backend/data
 
-# Create startup script
-RUN echo '#!/bin/sh' > /app/start.sh && \
-    echo 'cd /app/frontend && PORT=3000 node_modules/.bin/next start &' >> /app/start.sh && \
-    echo 'sleep 3' >> /app/start.sh && \
-    echo 'cd /app/backend && node server.js' >> /app/start.sh && \
-    chmod +x /app/start.sh
+# Create PM2 ecosystem config
+RUN cat > /app/ecosystem.config.js << 'EOF'
+module.exports = {
+  apps: [
+    {
+      name: 'ugova-backend',
+      cwd: '/app/backend',
+      script: 'server.js',
+      env: {
+        PORT: 3001,
+        NODE_ENV: 'production',
+        JWT_SECRET: 'ugova_jwt_secret_2024'
+      }
+    },
+    {
+      name: 'ugova-frontend',
+      cwd: '/app/frontend',
+      script: 'node_modules/.bin/next',
+      args: 'start',
+      env: {
+        PORT: 3000,
+        NODE_ENV: 'production',
+        NEXT_PUBLIC_API_URL: 'http://localhost:3001'
+      }
+    }
+  ]
+};
+EOF
 
-# Expose port
-EXPOSE 3000 3001
+# Expose frontend port
+EXPOSE 3000
 
-# Start both services
-CMD ["/app/start.sh"]
+# Start with PM2
+CMD ["pm2-runtime", "/app/ecosystem.config.js"]
