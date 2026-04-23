@@ -1,18 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
-const supabase = require('../services/supabaseClient');
+const { db } = require('../services/db');
 
 router.get('/me', authenticate, async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('id, email, first_name, last_name, phone, state, education, role, is_verified, created_at')
-      .eq('id', req.user.id)
-      .single();
-
-    if (error) throw error;
-    res.json(data);
+    const user = db.users.findOne({ id: req.user.id });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const { password, ...profile } = user;
+    res.json(profile);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
