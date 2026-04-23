@@ -1,48 +1,34 @@
-const supabase = require('../services/supabaseClient');
+const { db } = require('../services/db');
 
 const getDashboardStats = async (req, res) => {
   try {
-    const { count: totalUsers } = await supabase
-      .from('users')
-      .select('*', { count: 'exact', head: true });
+    const totalUsers = db.users.count();
+    const totalApplications = db.applications.count();
+    const totalOpportunities = db.opportunities.findAll().length;
+    const verifiedUsers = db.users.count({ is_verified: true });
 
-    const { count: totalApplications } = await supabase
-      .from('applications')
-      .select('*', { count: 'exact', head: true });
-
-    const { count: totalOpportunities } = await supabase
-      .from('opportunities')
-      .select('*', { count: 'exact', head: true });
-
-    const { count: verifiedUsers } = await supabase
-      .from('users')
-      .select('*', { count: 'exact', head: true })
-      .eq('is_verified', true);
-
-    const { data: recentApplications } = await supabase
-      .from('applications')
-      .select(`
-        *,
-        user:users(id, first_name, last_name, email),
-        opportunity:opportunities(title, type)
-      `)
-      .order('applied_at', { ascending: false })
-      .limit(10);
-
-    const { data: applicationsByStatus } = await supabase
-      .from('applications')
-      .select('status, count:id')
-      .group('status');
+    const recentApplications = db.applications.findAll({}, { order: { column: 'applied_at', ascending: false }, limit: 10 });
+    
+    // Enrich with user and opportunity data
+    const enriched = recentApplications.map(app => {
+      const user = db.users.findOne({ id: app.user_id });
+      const opp = db.opportunities.findOne({ id: app.opportunity_id });
+      return {
+        ...app,
+        user: user ? { id: user.id, first_name: user.first_name, last_name: user.last_name, email: user.email } : null,
+        opportunity: opp ? { title: opp.title, type: opp.type } : null
+      };
+    });
 
     res.json({
       stats: {
-        totalUsers: totalUsers || 0,
-        totalApplications: totalApplications || 0,
-        totalOpportunities: totalOpportunities || 0,
-        verifiedUsers: verifiedUsers || 0
+        totalUsers,
+        totalApplications,
+        totalOpportunities,
+        verifiedUsers
       },
-      recentApplications: recentApplications || [],
-      applicationsByStatus: applicationsByStatus || []
+      recentApplications: enriched,
+      applicationsByStatus: []
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -54,19 +40,18 @@ const getAllUsers = async (req, res) => {
     const { page = 1, limit = 20 } = req.query;
     const offset = (page - 1) * limit;
 
-    const { data, error, count } = await supabase
-      .from('users')
-      .select('id, email, first_name, last_name, phone, state, role, is_verified, created_at', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
-
-    if (error) throw error;
+    const allUsers = db.users.findAll({
+      select: ['id', 'email', 'first_name', 'last_name', 'phone', 'state', 'role', 'is_verified', 'created_at'],
+      order: { column: 'created_at', ascending: false },
+      offset: parseInt(offset),
+      limit: parseInt(limit)
+    });
 
     res.json({
-      users: data,
-      total: count,
+      users: allUsers,
+      total: db.users.count(),
       page: parseInt(page),
-      totalPages: Math.ceil(count / limit)
+      totalPages: Math.ceil(db.users.count() / limit)
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -78,27 +63,29 @@ const getAllApplications = async (req, res) => {
     const { page = 1, limit = 20, status } = req.query;
     const offset = (page - 1) * limit;
 
-    let query = supabase
-      .from('applications')
-      .select(`
-        *,
-        user:users(id, first_name, last_name, email),
-        opportunity:opportunities(title, type, organization)
-      `, { count: 'exact' })
-      .order('applied_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+    const query = {};
+    if (status) query.status = status;
 
-    if (status) query = query.eq('status', status);
+    const allApps = db.applications.findAll(query, { order: { column: 'applied_at', ascending: false }, limit: parseInt(limit) });
+    
+    // Enrich
+    const enriched = allApps.map(app => {
+      const user = db.users.findOne({ id: app.user_id });
+      const opp = db.opportunities.findOne({ id: app.opportunity_id });
+      return {
+        ...app,
+        user: user ? { id: user.id, first_name: user.first_name, last_name: user.last_name, email: user.email } : null,
+        opportunity: opp ? { title: opp.title, type: opp.type, organization: opp.organization } : null
+      };
+    });
 
-    const { data, error, count } = await query;
-
-    if (error) throw error;
+    const total = status ? db.applications.findAll(query).length : db.applications.count();
 
     res.json({
-      applications: data,
-      total: count,
+      applications: enriched,
+      total,
       page: parseInt(page),
-      totalPages: Math.ceil(count / limit)
+      totalPages: Math.ceil(total / limit)
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -110,15 +97,9 @@ const updateApplicationStatus = async (req, res) => {
     const { id } = req.params;
     const { status, notes } = req.body;
 
-    const { data, error } = await supabase
-      .from('applications')
-      .update({ status, admin_notes: notes, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) throw error;
-    res.json(data);
+    const app = db.applications.update(id, { status, admin_notes: notes });
+    if (!app) return res.status(404).json({ error: 'Not found' });
+    res.json(app);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -128,27 +109,18 @@ const getUserDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('id, email, first_name, last_name, phone, state, education, role, is_verified, created_at')
-      .eq('id', id)
-      .single();
+    const user = db.users.findOne({ id });
+    if (!user) return res.status(404).json({ error: 'User not found' });
 
-    if (userError) throw userError;
+    const { password, ...userData } = user;
 
-    const { data: applications } = await supabase
-      .from('applications')
-      .select(`
-        *,
-        opportunity:opportunities(title, type, organization)
-      `)
-      .eq('user_id', id)
-      .order('applied_at', { ascending: false });
-
-    res.json({
-      user,
-      applications: applications || []
+    const applications = db.applications.findAll({ user_id: id }, { order: { column: 'applied_at', ascending: false } });
+    const enriched = applications.map(app => {
+      const opp = db.opportunities.findOne({ id: app.opportunity_id });
+      return { ...app, opportunity: opp ? { title: opp.title, type: opp.type, organization: opp.organization } : null };
     });
+
+    res.json({ user: userData, applications: enriched });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
