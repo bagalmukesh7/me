@@ -1,10 +1,7 @@
 const jwt = require('jsonwebtoken');
-const { createClient } = require('@supabase/supabase-js');
+const { db } = require('../services/db');
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+const JWT_SECRET = process.env.JWT_SECRET || 'ugova_jwt_secret_2024';
 
 const authenticate = async (req, res, next) => {
   try {
@@ -14,15 +11,10 @@ const authenticate = async (req, res, next) => {
       return res.status(401).json({ error: 'No token provided' });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', decoded.userId)
-      .single();
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = db.users.findOne({ id: decoded.userId });
 
-    if (error || !user) {
+    if (!user) {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
@@ -40,4 +32,4 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-module.exports = { authenticate, requireAdmin };
+module.exports = { authenticate, requireAdmin, JWT_SECRET };
