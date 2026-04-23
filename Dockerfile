@@ -27,10 +27,10 @@ RUN npm install -g pm2
 COPY --from=backend /app/backend /app/backend
 RUN cd /app/backend && npm install --production
 
-# Copy frontend
-COPY --from=frontend /app/frontend/.next /app/frontend/.next
-COPY --from=frontend /app/frontend/package.json /app/frontend/package.json
-COPY --from=frontend /app/frontend/node_modules /app/frontend/node_modules
+# Copy frontend standalone output
+COPY --from=frontend /app/frontend/.next/standalone /app/frontend
+COPY --from=frontend /app/frontend/.next/static /app/frontend/.next/static
+COPY --from=frontend /app/frontend/public /app/frontend/public
 
 # Create data directory
 RUN mkdir -p /app/backend/data
@@ -47,7 +47,7 @@ RUN echo 'module.exports = {' > /app/ecosystem.config.js && \
     echo '    {' >> /app/ecosystem.config.js && \
     echo '      name: "ugova-frontend",' >> /app/ecosystem.config.js && \
     echo '      cwd: "/app/frontend",' >> /app/ecosystem.config.js && \
-    echo '      script: "node_modules/.bin/next",' >> /app/ecosystem.config.js && \
+    echo '      script: "server.js",' >> /app/ecosystem.config.js && \
     echo '      args: "start",' >> /app/ecosystem.config.js && \
     echo '      env: { PORT: 3000, NODE_ENV: "production", NEXT_PUBLIC_API_URL: "http://localhost:3001" }' >> /app/ecosystem.config.js && \
     echo '    }' >> /app/ecosystem.config.js && \
