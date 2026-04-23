@@ -31,7 +31,6 @@ COPY --from=backend /app/backend /app/backend
 
 # Copy frontend
 COPY --from=frontend /app/frontend/.next /app/frontend/.next
-COPY --from=frontend /app/frontend/public /app/frontend/public
 COPY --from=frontend /app/frontend/package.json /app/frontend/package.json
 COPY --from=frontend /app/frontend/node_modules /app/frontend/node_modules
 
