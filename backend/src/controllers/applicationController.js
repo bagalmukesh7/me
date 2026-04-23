@@ -1,50 +1,29 @@
-const supabase = require('../services/supabaseClient');
-const { sendApplicationEmail } = require('../services/emailService');
+const { db } = require('../services/db');
 
 const createApplication = async (req, res) => {
   try {
     const { opportunity_id } = req.body;
     const user_id = req.user.id;
 
-    // Get opportunity details
-    const { data: opportunity, error: oppError } = await supabase
-      .from('opportunities')
-      .select('*')
-      .eq('id', opportunity_id)
-      .single();
-
-    if (oppError || !opportunity) {
+    const opportunity = db.opportunities.findOne({ id: opportunity_id });
+    if (!opportunity) {
       return res.status(404).json({ error: 'Opportunity not found' });
     }
 
-    // Check if already applied
-    const { data: existing } = await supabase
-      .from('applications')
-      .select('*')
-      .eq('user_id', user_id)
-      .eq('opportunity_id', opportunity_id)
-      .single();
-
+    const existing = db.applications.findOne({ user_id, opportunity_id });
     if (existing) {
       return res.status(400).json({ error: 'Already applied to this opportunity' });
     }
 
-    // Create application record
-    const { data: application, error } = await supabase
-      .from('applications')
-      .insert([{
-        user_id,
-        opportunity_id,
-        status: 'applied',
-        applied_at: new Date().toISOString()
-      }])
-      .select()
-      .single();
+    const application = db.applications.insert({
+      user_id,
+      opportunity_id,
+      status: 'applied',
+      applied_at: new Date().toISOString()
+    });
 
-    if (error) throw error;
-
-    // Send confirmation email
-    await sendApplicationEmail(req.user.email, opportunity);
+    // Simulate email
+    console.log(`[EMAIL] Application confirmation sent to ${req.user.email} for ${opportunity.title}`);
 
     res.status(201).json({
       message: 'Application recorded successfully',
@@ -58,17 +37,15 @@ const createApplication = async (req, res) => {
 
 const getUserApplications = async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('applications')
-      .select(`
-        *,
-        opportunity:opportunities(*)
-      `)
-      .eq('user_id', req.user.id)
-      .order('applied_at', { ascending: false });
+    const apps = db.applications.findAll({ user_id: req.user.id }, { order: { column: 'applied_at', ascending: false } });
+    
+    // Enrich with opportunity data
+    const enriched = apps.map(app => {
+      const opp = db.opportunities.findOne({ id: app.opportunity_id });
+      return { ...app, opportunity: opp || null };
+    });
 
-    if (error) throw error;
-    res.json(data || []);
+    res.json(enriched);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -77,19 +54,13 @@ const getUserApplications = async (req, res) => {
 const getApplication = async (req, res) => {
   try {
     const { id } = req.params;
+    const app = db.applications.findOne({ id });
+    if (!app) return res.status(404).json({ error: 'Not found' });
     
-    const { data, error } = await supabase
-      .from('applications')
-      .select(`
-        *,
-        opportunity:opportunities(*),
-        user:users(id, first_name, last_name, email)
-      `)
-      .eq('id', id)
-      .single();
-
-    if (error) throw error;
-    res.json(data);
+    const opp = db.opportunities.findOne({ id: app.opportunity_id });
+    const user = db.users.findOne({ id: app.user_id });
+    
+    res.json({ ...app, opportunity: opp, user: user ? { id: user.id, first_name: user.first_name, last_name: user.last_name, email: user.email } : null });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -100,15 +71,9 @@ const updateStatus = async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
 
-    const { data, error } = await supabase
-      .from('applications')
-      .update({ status, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) throw error;
-    res.json(data);
+    const app = db.applications.update(id, { status });
+    if (!app) return res.status(404).json({ error: 'Not found' });
+    res.json(app);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -117,14 +82,8 @@ const updateStatus = async (req, res) => {
 const deleteApplication = async (req, res) => {
   try {
     const { id } = req.params;
-    
-    const { error } = await supabase
-      .from('applications')
-      .delete()
-      .eq('id', id)
-      .eq('user_id', req.user.id);
-
-    if (error) throw error;
+    const success = db.applications.delete(id, req.user.id);
+    if (!success) return res.status(404).json({ error: 'Not found' });
     res.json({ message: 'Application deleted' });
   } catch (error) {
     res.status(500).json({ error: error.message });
