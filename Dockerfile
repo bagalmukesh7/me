@@ -30,7 +30,6 @@ RUN cd /app/backend && npm install --production
 # Copy frontend standalone output
 COPY --from=frontend /app/frontend/.next/standalone /app/frontend
 COPY --from=frontend /app/frontend/.next/static /app/frontend/.next/static
-COPY --from=frontend /app/frontend/public /app/frontend/public
 
 # Create data directory
 RUN mkdir -p /app/backend/data
